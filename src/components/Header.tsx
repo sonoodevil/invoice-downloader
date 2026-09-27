@@ -30,14 +30,14 @@ export const Header: React.FC<HeaderProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-base sm:text-lg font-bold text-white tracking-tight">
-                  GDrive Invoice Batcher
+                  Simple Invoice Downloader
                 </h1>
                 <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                   50 Files / ZIP
                 </span>
               </div>
               <p className="text-xs text-slate-400 hidden sm:block">
-                Matches YYMMDD &lt;digits&gt; [ref].pdf &amp; packages into ZIPs
+                Searches Drive for invoice PDFs and batches them into ZIPs
               </p>
             </div>
           </div>
@@ -53,7 +53,7 @@ export const Header: React.FC<HeaderProps> = ({
               }`}
             >
               <Archive className="w-4 h-4" />
-              <span>Direct Runner (50/ZIP)</span>
+              <span>Batch Search</span>
             </button>
 
             <button
@@ -77,7 +77,7 @@ export const Header: React.FC<HeaderProps> = ({
               }`}
             >
               <Building2 className="w-4 h-4 text-amber-400" />
-              <span>Supplier Normalization</span>
+              <span>Search Filters</span>
             </button>
 
             <button
@@ -89,7 +89,7 @@ export const Header: React.FC<HeaderProps> = ({
               }`}
             >
               <Sparkles className="w-4 h-4" />
-              <span>Regex Matcher</span>
+              <span>Pattern Test</span>
             </button>
 
             <button
@@ -101,7 +101,7 @@ export const Header: React.FC<HeaderProps> = ({
               }`}
             >
               <Terminal className="w-4 h-4" />
-              <span>Drive Scanner</span>
+              <span>Drive Scan</span>
             </button>
 
             <button
@@ -113,7 +113,7 @@ export const Header: React.FC<HeaderProps> = ({
               }`}
             >
               <HelpCircle className="w-4 h-4" />
-              <span>Setup Guide</span>
+              <span>Setup</span>
             </button>
           </nav>
 
@@ -129,7 +129,7 @@ export const Header: React.FC<HeaderProps> = ({
 
             <button
               onClick={onDownloadPy}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-semibold text-xs sm:text-sm shadow-md transition transform active:scale-95"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-semibold text-xs shadow-md transition"
             >
               <Download className="w-4 h-4" />
               <span>Download Script</span>
