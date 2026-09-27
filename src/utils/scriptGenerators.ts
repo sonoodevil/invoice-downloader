@@ -2,14 +2,12 @@ import { ScriptConfig } from '../types';
 import { SupplierMapping, MASTER_SUPPLIER_MAPPINGS } from '../data/supplierMappings';
 
 export function generatePythonScript(config: ScriptConfig, customMappings?: SupplierMapping[]): string {
-  return generateBatchSheetPythonScript(config, customMappings);
+  return generateSimpleBatchPythonScript(config);
 }
 
-export function generateBatchSheetPythonScript(config: ScriptConfig, customMappings?: SupplierMapping[]): string {
+export function generateSimpleBatchPythonScript(config: ScriptConfig): string {
   const isServiceAccount = config.authType === 'service_account';
   const batchSize = config.batchSize || 50;
-  const sheetPath = config.sheetFilePath || 'invoices_input.xlsx';
-  const effectiveMappings = customMappings && customMappings.length > 0 ? customMappings : MASTER_SUPPLIER_MAPPINGS;
 
   const authImports = isServiceAccount
     ? `from google.oauth2 import service_account`
@@ -19,30 +17,21 @@ from google_auth_oauthlib.flow import InstalledAppFlow`;
 
   const authFunction = isServiceAccount
     ? `def get_drive_service(credentials_file="service_account.json"):
-    """
-    Authenticate using Google Cloud Service Account credentials.
-    Ensure your Google Drive folder is shared with the service account email.
-    """
+    """Authenticate using Google Cloud Service Account credentials."""
     if not os.path.exists(credentials_file):
-        raise FileNotFoundError(
-            f"Service account file '{credentials_file}' not found.\\n"
-            "Download it from Google Cloud Console -> IAM & Admin -> Service Accounts -> Keys."
-        )
+        raise FileNotFoundError(f"Service account file '{credentials_file}' not found.")
     creds = service_account.Credentials.from_service_account_file(
         credentials_file, scopes=SCOPES
     )
     return build("drive", "v3", credentials=creds)`
     : `def get_drive_service(credentials_file="credentials.json", token_file="token.json"):
-    """
-    Authenticate using OAuth 2.0 Client credentials (browser pop-up).
-    Saves authorization token to token.json for subsequent runs.
-    """
+    """Authenticate using OAuth 2.0 (browser pop-up)."""
     creds = None
     if os.path.exists(token_file):
         try:
             creds = Credentials.from_authorized_user_file(token_file, SCOPES)
         except Exception as e:
-            logger.warning(f"Existing token could not be loaded: {e}. Re-authenticating...")
+            logger.warning(f"Token could not be loaded: {e}. Re-authenticating...")
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
@@ -50,17 +39,14 @@ from google_auth_oauthlib.flow import InstalledAppFlow`;
             creds.refresh(Request())
         else:
             if not os.path.exists(credentials_file):
-                raise FileNotFoundError(
-                    f"Credentials file '{credentials_file}' not found.\\n"
-                    "Download your OAuth 2.0 Client ID json from Google Cloud Console and save it as credentials.json."
-                )
+                raise FileNotFoundError(f"Credentials file '{credentials_file}' not found.")
             logger.info("Opening browser for Google Drive authorization...")
             flow = InstalledAppFlow.from_client_secrets_file(credentials_file, SCOPES)
             creds = flow.run_local_server(port=0)
             
         with open(token_file, "w") as token:
             token.write(creds.to_json())
-            logger.info(f"Saved refreshed authorization token to {token_file}")
+            logger.info(f"Saved token to {token_file}")
 
     return build("drive", "v3", credentials=creds)`;
 
@@ -71,30 +57,15 @@ from google_auth_oauthlib.flow import InstalledAppFlow`;
 
   return `#!/usr/bin/env python3
 """
-Google Drive Invoice Harvester (Batch 50-per-ZIP Edition)
-========================================================
+SIMPLE Google Drive Invoice Batch Downloader
+=============================================
 Features:
-1. Reads input Excel (.xlsx/.xls) or CSV sheet with:
-   - Supplier Name
-   - Invoice Number (digits only)
-2. Comprehensive Multi-Source Search:
-   - Searches files in "My Drive"
-   - Searches "Shared with me" files (sharedWithMe = true)
-   - Recursively resolves "Shortcut folders" (mimeType = shortcut pointing to folders)
-   - Resolves Direct File Shortcuts (shortcut pointing to PDF)
-   - Searches Shared Drives (supportsAllDrives = true)
-3. Matches filenames following standard invoice patterns:
-   - YYMMDD <invoice_number_digits> <reference>.pdf (e.g., "260403 489201 REF9942.pdf")
-   - YYMMDD <invoice_number_digits>.pdf (e.g., "260403 489201.pdf")
-   (NO DASH or special characters, strictly spaces only)
-4. Downloads files in chunked streams with rate-limit retry backoff.
-5. Packages files into ZIP archives in batches of ${batchSize} files:
-   - invoices_batch_01_1-${batchSize}.zip
-   - invoices_batch_02_${batchSize + 1}-${batchSize * 2}.zip
-   ... until all files are processed.
-6. Generates a reconciliation report of matched vs missing invoices.
+1. Search Google Drive for PDFs matching "invoice" keyword
+2. Download matched files AS-IS (no renaming, no 3-line PDF nonsense)
+3. Package into ZIPs: 50 files per batch (flat structure, no folders inside)
+4. Clean, minimal code - no suppliers, no shortcuts, no overcomplications
 
-Generated by GDrive Invoice Downloader & Python Script Studio
+Generated by GDrive Invoice Downloader Studio
 """
 
 import io
@@ -117,48 +88,20 @@ ${authImports}
 # ==============================================================================
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
-# Input spreadsheet file path (Excel .xlsx / .xls or CSV)
-INPUT_SHEET_PATH = "${sheetPath}"
-
-# Target Google Drive folder ID (leave empty to search all Drive & Shared files)
-TARGET_FOLDER_ID = "${config.folderId.trim()}"
-
-# Search flags
-SEARCH_SHARED_WITH_ME = ${config.includeSharedWithMe ? 'True' : 'False'}
-RESOLVE_SHORTCUT_FOLDERS = ${config.resolveShortcuts ? 'True' : 'False'}
-SUPPORT_SHARED_DRIVES = ${config.includeSharedDrives ? 'True' : 'False'}
-
-# Rate Limiter Configuration:
-# Google Drive API enforces a quota limit (~1,000 queries per 100 seconds per user,
-# with a ~10 queries/sec burst ceiling). This rate limiter enforces a controlled delay
-# between file downloads to prevent HTTP 429 'User Rate Limit Exceeded' errors.
-RATE_LIMIT_DELAY = ${config.rateLimitDelaySec.toFixed(2)}  # Delay in seconds between downloads
-ENABLE_JITTER = ${config.enableJitter ? 'True' : 'False'}     # Add ±15% random variance to avoid periodic bursts
+# Search keyword for invoices
+SEARCH_KEYWORD = "invoice"
 
 # Number of files per ZIP archive
 BATCH_SIZE = ${batchSize}
 
-# Folder Organization Structure within ZIP or Output directory
-# Options: 'supplier_only', 'flat', 'date_only', 'doctype_only', 'supplier_date_doctype', 'date_supplier_doctype', 'doctype_supplier_date', 'doctype_date_supplier'
-FOLDER_STRUCTURE = "${config.folderStructure || 'supplier_only'}"
-
-# Session Resume Configuration:
-# Allows resuming an interrupted session by skipping already completed rows in sequence.
-RESUME_PREVIOUS_SESSION = ${config.resumeModeEnabled ? 'True' : 'False'}
-LAST_SUCCESSFUL_INVOICE_ID = "${config.lastSuccessfulInvoiceId ? config.lastSuccessfulInvoiceId.trim() : ''}"
-
 # Output directories
-OUTPUT_DIR = "${config.outputDir}"
+OUTPUT_DIR = "./downloaded_invoices"
 ZIPS_DIR = os.path.join(OUTPUT_DIR, "zip_batches")
 TEMP_DOWNLOAD_DIR = os.path.join(OUTPUT_DIR, "temp_downloads")
 
-# Regex pattern strictly enforcing:
-# - YYMMDD (6 numeric digits, e.g. 260403 for 2026-04-03)
-# - Space
-# - <INV NUMBER BUT ONLY DIGITS> (digits only)
-# - Optional space and <ref> (letters, numbers, spaces only - NO DASH / NO SPECIAL CHARACTERS)
-# - .pdf extension
-INVOICE_PATTERN = re.compile(r"^(\\d{6})\\s+(\\d+)(?:\\s+([a-zA-Z0-9 ]+))?\\.pdf$", re.IGNORECASE)
+# Rate limiting
+RATE_LIMIT_DELAY = ${config.rateLimitDelaySec.toFixed(2)}
+ENABLE_JITTER = ${config.enableJitter ? 'True' : 'False'}
 
 # Logging setup
 logging.basicConfig(
@@ -166,121 +109,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
-logger = logging.getLogger("InvoiceHarvester")
-
-
-# ==============================================================================
-# SUPPLIER NORMALIZATION & TARGET FOLDER DIRECTORY (${effectiveMappings.length} Suppliers)
-# ==============================================================================
-# Hardcoded supplier dictionary from the UI (supports additions & edits).
-# Every downloaded invoice will be saved inside its supplier's dedicated folder.
-SUPPLIER_MAPPINGS = [
-${effectiveMappings.map(m => `    {"sheet": ${JSON.stringify(m.sheetSupplier)}, "folder": ${JSON.stringify(m.driveFolderMatches || m.sheetSupplier)}, "canonical": ${JSON.stringify(m.canonicalName || m.sheetSupplier)}}`).join(',\n')}
-]
-
-def resolve_supplier_folder(raw_supplier):
-    """
-    Normalizes a sheet supplier name to its corresponding Google Drive folder name.
-    Matches against canonical name, sheet supplier, and folder aliases.
-    """
-    if not raw_supplier:
-        return "Unknown Supplier"
-
-    clean_raw = str(raw_supplier).strip().lower()
-
-    def strip_corp(name):
-        return re.sub(r"\\b(ltd|limited|co|corp|uk|llp|plc)\\b|[.,&/|\\\\]", " ", name, flags=re.IGNORECASE).strip()
-
-    clean_raw_stripped = strip_corp(clean_raw)
-
-    for item in SUPPLIER_MAPPINGS:
-        sheet_s = item["sheet"].strip().lower()
-        canon_s = item["canonical"].strip().lower()
-        if clean_raw == sheet_s or clean_raw == canon_s:
-            return item["canonical"] or item["sheet"]
-
-        aliases = [a.strip().lower() for a in re.split(r"[|/]+", item["canonical"]) if a.strip()]
-        if clean_raw in aliases:
-            return item["canonical"] or item["sheet"]
-
-        folder_aliases = [f.strip().lower() for f in re.split(r"[|/]+", item["folder"]) if f.strip()]
-        if clean_raw in folder_aliases:
-            return item["canonical"] or item["sheet"]
-
-        if clean_raw_stripped and clean_raw_stripped == strip_corp(sheet_s):
-            return item["canonical"] or item["sheet"]
-
-    # Fallback: remove illegal filesystem path characters
-    safe = re.sub(r"[/\\\\:*?\\"<>|]", " ", str(raw_supplier)).strip()
-    return safe or "Unknown Supplier"
-
-
-def format_invoice_filename(date_digits, inv_digits, reference=""):
-    """
-    Strictly formats filename:
-    YYMMDD <INV NUMBER BUT ONLY DIGITS> <ref>.pdf
-    or
-    YYMMDD <INV NUMBER BUT ONLY DIGITS>.pdf
-    NO DASH / OR ANY OTHER SPECIAL CHARACTER OTHER THAN SPACE
-    """
-    digits_raw = re.sub(r"\\D", "", str(date_digits))
-    if len(digits_raw) == 8:
-        # Convert YYYYMMDD -> YYMMDD (e.g. 20260403 -> 260403)
-        date_clean = digits_raw[2:8]
-    elif len(digits_raw) >= 6:
-        date_clean = digits_raw[:6]
-    else:
-        date_clean = digits_raw.ljust(6, "0")
-
-    inv_clean = re.sub(r"\\D", "", str(inv_digits))
-
-    ref_clean = re.sub(r"[^a-zA-Z0-9\\s]", " ", str(reference or ""))
-    ref_clean = re.sub(r"\\s+", " ", ref_clean).strip()
-
-    if ref_clean:
-        return f"{date_clean} {inv_clean} {ref_clean}.pdf"
-    else:
-        return f"{date_clean} {inv_clean}.pdf"
-
-
-def build_nested_folder_path(structure, supplier_name, date_digits, filename, invoice_number=""):
-    s_folder = resolve_supplier_folder(supplier_name)
-    
-    digits_raw = re.sub(r"\D", "", str(date_digits))
-    if len(digits_raw) == 6:
-        d_folder = f"20{digits_raw[0:2]}-{digits_raw[2:4]}-{digits_raw[4:6]}"
-    elif len(digits_raw) == 8:
-        d_folder = f"{digits_raw[0:4]}-{digits_raw[4:6]}-{digits_raw[6:8]}"
-    else:
-        d_folder = date_digits or "No Date"
-
-    combined = f"{filename} {invoice_number}".lower()
-    if any(k in combined for k in ["credit", "crn", "cn", "refund", "creditnote"]):
-        doc_type = "Credit Notes"
-    elif any(k in combined for k in ["receipt", "rcp", "rec", "payment"]):
-        doc_type = "Receipts"
-    else:
-        doc_type = "Invoices"
-
-    if structure == "flat":
-        return filename
-    elif structure == "date_only":
-        return f"{d_folder}/{filename}"
-    elif structure == "doctype_only":
-        return f"{doc_type}/{filename}"
-    elif structure == "supplier_only":
-        return f"{s_folder}/{filename}"
-    elif structure == "supplier_date_doctype":
-        return f"{s_folder}/{d_folder}/{doc_type}/{filename}"
-    elif structure == "date_supplier_doctype":
-        return f"{d_folder}/{s_folder}/{doc_type}/{filename}"
-    elif structure == "doctype_supplier_date":
-        return f"{doc_type}/{s_folder}/{d_folder}/{filename}"
-    elif structure == "doctype_date_supplier":
-        return f"{doc_type}/{d_folder}/{s_folder}/{filename}"
-    else:
-        return f"{s_folder}/{filename}"
-
+logger = logging.getLogger("InvoiceDownloader")
 
 
 # ==============================================================================
@@ -290,178 +119,18 @@ ${authFunction}
 
 
 # ==============================================================================
-# SHEET PARSER
+# GOOGLE DRIVE SEARCH
 # ==============================================================================
-def load_input_sheet(file_path):
+def search_invoices(service, search_term="invoice"):
     """
-    Loads Excel or CSV file and normalizes columns to find:
-    - Supplier Name
-    - Invoice Number (digits only)
+    Simple Google Drive search for PDFs matching search_term.
+    Returns list of file objects.
     """
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(
-            f"Input sheet '{file_path}' not found! Place your Excel or CSV file in this folder."
-        )
-
-    logger.info(f"Reading input sheet: {file_path}")
-    if file_path.endswith((".xlsx", ".xls")):
-        df = pd.read_excel(file_path)
-    else:
-        df = pd.read_csv(file_path)
-
-    # Normalize column names for flexible detection
-    col_mapping = {}
-    for col in df.columns:
-        c_clean = str(col).strip().lower().replace("_", " ").replace("-", " ")
-        if any(k in c_clean for k in ["supplier", "vendor", "party", "company"]):
-            col_mapping[col] = "supplier_name"
-        elif any(k in c_clean for k in ["invoice", "inv", "bill", "number", "inv no"]):
-            col_mapping[col] = "invoice_number"
-
-    df = df.rename(columns=col_mapping)
-
-    if "invoice_number" not in df.columns:
-        raise ValueError(
-            f"Could not identify Invoice Number column. Found columns: {list(df.columns)}. "
-            "Please ensure your sheet has an 'Invoice Number' or 'Invoice' column."
-        )
-
-    entries = []
-    for idx, row in df.iterrows():
-        raw_inv = str(row["invoice_number"]).strip()
-        if raw_inv.endswith(".0"):
-            raw_inv = raw_inv[:-2]
-        
-        # Keep digits only
-        digits_only = re.sub(r"\\D", "", raw_inv)
-        if not digits_only:
-            continue
-
-        supplier = str(row.get("supplier_name", "Unknown")).strip()
-        entries.append({
-            "row_index": idx + 1,
-            "supplier_name": supplier,
-            "invoice_number": digits_only
-        })
-
-    logger.info(f"Extracted {len(entries)} valid invoice entries from sheet.")
-    return entries
-
-
-# ==============================================================================
-# SHORTCUT RESOLUTION & TARGET FOLDER SCANNER
-# ==============================================================================
-def find_shortcut_folders(service):
-    """
-    Finds all shortcut items in Google Drive that point to folders.
-    Returns list of dicts: {'name': shortcut_name, 'target_folder_id': target_id}
-    """
-    if not RESOLVE_SHORTCUT_FOLDERS:
-        return []
-
-    logger.info("Scanning Google Drive for shortcut folders...")
-    query = "trashed = false and mimeType = 'application/vnd.google-apps.shortcut'"
-    if TARGET_FOLDER_ID:
-        query += f" and '{TARGET_FOLDER_ID}' in parents"
-
-    page_token = None
-    shortcut_folders = []
-
-    while True:
-        try:
-            results = service.files().list(
-                q=query,
-                spaces="drive",
-                fields="nextPageToken, files(id, name, shortcutDetails)",
-                pageSize=100,
-                pageToken=page_token,
-                ${sharedDrivesParams}
-            ).execute()
-
-            for item in results.get("files", []):
-                details = item.get("shortcutDetails", {})
-                target_mime = details.get("targetMimeType", "")
-                target_id = details.get("targetId")
-
-                if target_id and target_mime == "application/vnd.google-apps.folder":
-                    shortcut_folders.append({
-                        "name": item.get("name", "Shortcut Folder"),
-                        "target_folder_id": target_id
-                    })
-                    logger.info(f"  [SHORTCUT FOLDER] Found: '{item['name']}' -> Target Folder ID: {target_id}")
-
-            page_token = results.get("nextPageToken")
-            if not page_token:
-                break
-        except HttpError as err:
-            logger.warning(f"Error querying shortcuts: {err}")
-            break
-
-    logger.info(f"Found {len(shortcut_folders)} shortcut folder(s) to search.")
-    return shortcut_folders
-
-
-# ==============================================================================
-# COMPREHENSIVE GOOGLE DRIVE SEARCH & MATCHER
-# ==============================================================================
-def search_drive_for_invoices(service, invoice_entries):
-    """
-    Performs a 3-part search:
-    1. Search 'My Drive' and Shared Drives for PDF files.
-    2. Search 'Shared with me' files (sharedWithMe = true).
-    3. Search inside all discovered Shortcut Folders.
-    Deduplicates files by file ID so duplicates are never processed twice.
-    """
-    inv_map = {item["invoice_number"]: item for item in invoice_entries}
-    matched_files = []
-    unmatched_invoices = set(inv_map.keys())
-    seen_file_ids = set()
-
-    def process_file_candidate(file_item, source_label):
-        file_id = file_item["id"]
-        if file_id in seen_file_ids:
-            return
-
-        name = file_item.get("name", "")
-        m = INVOICE_PATTERN.match(name)
-        if m:
-            file_date = m.group(1)
-            file_inv_digits = m.group(2)
-            file_ref = m.group(3) or ""
-            clean_filename = format_invoice_filename(file_date, file_inv_digits, file_ref)
-
-            if file_inv_digits in inv_map:
-                sheet_info = inv_map[file_inv_digits]
-                supplier_folder = resolve_supplier_folder(sheet_info["supplier_name"])
-                seen_file_ids.add(file_id)
-                matched_files.append({
-                    "file_id": file_id,
-                    "filename": clean_filename,
-                    "raw_filename": name,
-                    "date": file_date,
-                    "invoice_number": file_inv_digits,
-                    "reference": file_ref,
-                    "supplier_name": sheet_info["supplier_name"],
-                    "supplier_folder": supplier_folder,
-                    "source": source_label,
-                    "size": file_item.get("size", "0")
-                })
-                unmatched_invoices.discard(file_inv_digits)
-                logger.info(
-                    f"-> [FOUND] [{source_label}] #{file_inv_digits} ({sheet_info['supplier_name']}) -> Folder '{supplier_folder}': {clean_filename}"
-                )
-
-    # --------------------------------------------------------------------------
-    # PASS 1: Search My Drive & Shared Drives
-    # --------------------------------------------------------------------------
-    logger.info("[Pass 1/3] Scanning My Drive & Shared Drives for PDF files...")
-    clauses = ["trashed = false", "mimeType = 'application/pdf'"]
-    if TARGET_FOLDER_ID:
-        clauses.append(f"'{TARGET_FOLDER_ID}' in parents")
+    logger.info(f"Searching Google Drive for PDFs containing '{search_term}'...")
     
-    query = " and ".join(clauses)
+    query = f"name contains '{search_term}' and mimeType = 'application/pdf' and trashed = false"
+    files = []
     page_token = None
-    pass1_count = 0
 
     while True:
         try:
@@ -474,90 +143,23 @@ def search_drive_for_invoices(service, invoice_entries):
                 ${sharedDrivesParams}
             ).execute()
 
-            files = res.get("files", [])
-            pass1_count += len(files)
-            for f in files:
-                process_file_candidate(f, "My Drive")
+            batch_files = res.get("files", [])
+            files.extend(batch_files)
+            logger.info(f"  Found {len(batch_files)} files in this batch. Total so far: {len(files)}")
 
             page_token = res.get("nextPageToken")
             if not page_token:
                 break
         except HttpError as error:
-            logger.error(f"Google Drive API error in Pass 1: {error}")
+            logger.error(f"Google Drive API error: {error}")
             break
 
-    # --------------------------------------------------------------------------
-    # PASS 2: Search "Shared with me" files
-    # --------------------------------------------------------------------------
-    if SEARCH_SHARED_WITH_ME and not TARGET_FOLDER_ID:
-        logger.info("[Pass 2/3] Scanning 'Shared with me' files...")
-        query_shared = "sharedWithMe = true and trashed = false and mimeType = 'application/pdf'"
-        page_token = None
-        pass2_count = 0
-
-        while True:
-            try:
-                res = service.files().list(
-                    q=query_shared,
-                    spaces="drive",
-                    fields="nextPageToken, files(id, name, size, modifiedTime)",
-                    pageSize=100,
-                    pageToken=page_token,
-                    ${sharedDrivesParams}
-                ).execute()
-
-                files = res.get("files", [])
-                pass2_count += len(files)
-                for f in files:
-                    process_file_candidate(f, "Shared With Me")
-
-                page_token = res.get("nextPageToken")
-                if not page_token:
-                    break
-            except HttpError as error:
-                logger.warning(f"Error querying 'Shared with me': {error}")
-                break
-
-    # --------------------------------------------------------------------------
-    # PASS 3: Search Target Folders of all discovered Shortcuts
-    # --------------------------------------------------------------------------
-    shortcut_folders = find_shortcut_folders(service)
-    if shortcut_folders:
-        logger.info(f"[Pass 3/3] Scanning inside {len(shortcut_folders)} shortcut folder(s)...")
-        for sc in shortcut_folders:
-            target_fid = sc["target_folder_id"]
-            sc_name = sc["name"]
-            query_sc = f"'{target_fid}' in parents and trashed = false and mimeType = 'application/pdf'"
-            page_token = None
-
-            while True:
-                try:
-                    res = service.files().list(
-                        q=query_sc,
-                        spaces="drive",
-                        fields="nextPageToken, files(id, name, size, modifiedTime)",
-                        pageSize=100,
-                        pageToken=page_token,
-                        ${sharedDrivesParams}
-                    ).execute()
-
-                    for f in res.get("files", []):
-                        process_file_candidate(f, f"Shortcut Folder: {sc_name}")
-
-                    page_token = res.get("nextPageToken")
-                    if not page_token:
-                        break
-                except HttpError as error:
-                    logger.warning(f"Error scanning shortcut folder '{sc_name}' ({target_fid}): {error}")
-                    break
-
-    logger.info(f"Drive search finished across all sources.")
-    logger.info(f"Total matched files: {len(matched_files)}. Missing invoices: {len(unmatched_invoices)}.")
-    return matched_files, list(unmatched_invoices)
+    logger.info(f"Total PDFs found: {len(files)}")
+    return files
 
 
 # ==============================================================================
-# DOWNLOAD & 50-PER-BATCH ZIP CREATION
+# DOWNLOAD & BATCH ZIP CREATION
 # ==============================================================================
 def download_file(service, file_id, destination_path, filename):
     """Downloads single file with chunked stream & exponential backoff."""
@@ -586,14 +188,15 @@ def download_file(service, file_id, destination_path, filename):
     return False
 
 
-def process_batches_and_zip(service, matched_files):
+def process_batches_and_zip(service, files):
     """
-    Downloads matched files and packages them into ZIP files in batches of 50.
+    Downloads files and packages them into ZIP files in batches of 50.
+    NO folder organization - flat ZIP structure.
     """
     os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
     os.makedirs(ZIPS_DIR, exist_ok=True)
 
-    total_files = len(matched_files)
+    total_files = len(files)
     num_batches = (total_files + BATCH_SIZE - 1) // BATCH_SIZE
     logger.info(f"Splitting {total_files} files into {num_batches} ZIP batch(es) of {BATCH_SIZE} files each.")
 
@@ -602,69 +205,55 @@ def process_batches_and_zip(service, matched_files):
     for batch_num in range(1, num_batches + 1):
         start_idx = (batch_num - 1) * BATCH_SIZE
         end_idx = min(start_idx + BATCH_SIZE, total_files)
-        batch_slice = matched_files[start_idx:end_idx]
+        batch_slice = files[start_idx:end_idx]
 
         zip_filename = f"invoices_batch_{batch_num:02d}_{start_idx + 1}_to_{end_idx}.zip"
         zip_path = os.path.join(ZIPS_DIR, zip_filename)
 
-        print("-" * 65)
+        print("-" * 70)
         logger.info(f"Processing Batch {batch_num}/{num_batches}: Files {start_idx + 1} to {end_idx}")
         logger.info(f"Target Archive: {zip_filename}")
 
         batch_temp_files = []
 
-        # Download batch items into supplier subdirectories
-        for i, item in enumerate(batch_slice, 1):
-            supplier_folder = item.get("supplier_folder", "Unknown Supplier")
-            filename = item["filename"]
+        # Download batch items
+        for i, file_item in enumerate(batch_slice, 1):
+            file_id = file_item["id"]
+            filename = file_item["name"]
+            
+            file_dest = os.path.join(TEMP_DOWNLOAD_DIR, filename)
 
-            supplier_temp_dir = os.path.join(TEMP_DOWNLOAD_DIR, supplier_folder)
-            os.makedirs(supplier_temp_dir, exist_ok=True)
-            file_dest = os.path.join(supplier_temp_dir, filename)
-
-            logger.info(f"[{i}/{len(batch_slice)}] Downloading to {supplier_folder}/{filename} (from {item.get('source', 'Drive')})...")
+            logger.info(f"[{i}/{len(batch_slice)}] Downloading: {filename}")
             
             if not os.path.exists(file_dest):
-                # Rate Limiter: pause between requests to prevent triggering Google Drive API HTTP 429 quota errors
+                # Rate Limiter
                 if RATE_LIMIT_DELAY > 0:
                     delay = RATE_LIMIT_DELAY
                     if ENABLE_JITTER:
                         delay += random.uniform(-0.15 * RATE_LIMIT_DELAY, 0.15 * RATE_LIMIT_DELAY)
                     delay = max(0.05, delay)
-                    logger.debug(f"Rate Limiter: waiting {delay:.2f}s before downloading {filename}...")
                     time.sleep(delay)
 
-                success = download_file(service, item["file_id"], file_dest, filename)
+                success = download_file(service, file_id, file_dest, filename)
                 if not success:
                     logger.error(f"Failed to download {filename}, skipping from archive.")
                     continue
-            batch_temp_files.append((file_dest, supplier_folder, filename))
+            
+            batch_temp_files.append(file_dest)
 
-        # Compress into ZIP inside folders
+        # Compress into ZIP with FLAT structure (no folders inside)
         logger.info(f"Packing {len(batch_temp_files)} files into {zip_filename}...")
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            for file_path, s_folder, fname in batch_temp_files:
-                # Resolve nested ZIP path using build_nested_folder_path
-                m_item = next((m for m in matched_files if m["filename"] == fname), None)
-                date_digits = m_item.get("date", "260403") if m_item else "260403"
-                inv_digits = m_item.get("invoice_number", "") if m_item else ""
-                s_name = m_item.get("supplier_name", "Unknown") if m_item else s_folder
-                
-                arcname = build_nested_folder_path(
-                    FOLDER_STRUCTURE, 
-                    s_name, 
-                    date_digits, 
-                    fname, 
-                    inv_digits
-                )
-                zipf.write(file_path, arcname)
+            for file_path in batch_temp_files:
+                # Add file to ZIP at root level (no subdirectories)
+                zipf.write(file_path, arcname=os.path.basename(file_path))
 
         zip_size_mb = os.path.getsize(zip_path) / (1024 * 1024)
         logger.info(f"[SUCCESS] Created ZIP: {zip_path} ({zip_size_mb:.2f} MB)")
         created_zips.append((zip_filename, zip_size_mb, len(batch_temp_files)))
 
-        # Clean up temp files for this batch to save disk space
-        for file_path, _, _ in batch_temp_files:
+        # Clean up temp files for this batch
+        for file_path in batch_temp_files:
             try:
                 if os.path.exists(file_path):
                     os.remove(file_path)
@@ -679,35 +268,9 @@ def process_batches_and_zip(service, matched_files):
 # ==============================================================================
 def main():
     print("=" * 70)
-    print("  GOOGLE DRIVE INVOICE BATCH HARVESTER & 50-FILE ZIP PACKAGER")
-    print("  (My Drive + Shared with Me + Shortcut Folders + Shared Drives)")
+    print("  SIMPLE GOOGLE DRIVE INVOICE BATCH DOWNLOADER")
+    print("  (Flat ZIP structure, 50 files per batch)")
     print("=" * 70)
-
-    try:
-        invoice_entries = load_input_sheet(INPUT_SHEET_PATH)
-        if RESUME_PREVIOUS_SESSION and LAST_SUCCESSFUL_INVOICE_ID:
-            # Locate position of the last successful invoice in the entries
-            last_successful_idx = -1
-            for idx, entry in enumerate(invoice_entries):
-                if str(entry["invoice_number"]).strip() == str(LAST_SUCCESSFUL_INVOICE_ID).strip():
-                    last_successful_idx = idx
-                    break
-            
-            if last_successful_idx != -1:
-                skipped_entries = invoice_entries[:last_successful_idx + 1]
-                invoice_entries = invoice_entries[last_successful_idx + 1:]
-                logger.info(
-                    f"[RESUME] Session recovery active. Skipping first {len(skipped_entries)} rows "
-                    f"up to and including last successful invoice ID '{LAST_SUCCESSFUL_INVOICE_ID}'."
-                )
-            else:
-                logger.warning(
-                    f"[RESUME] Session recovery active but last successful invoice ID '{LAST_SUCCESSFUL_INVOICE_ID}' "
-                    f"was not found in loaded sheet. Processing all entries from start."
-                )
-    except Exception as e:
-        logger.error(f"Failed loading sheet: {e}")
-        sys.exit(1)
 
     try:
         service = get_drive_service()
@@ -715,48 +278,25 @@ def main():
         logger.error(f"Authentication failed: {e}")
         sys.exit(1)
 
-    matched_files, missing_invoices = search_drive_for_invoices(service, invoice_entries)
+    # Search for invoices
+    files = search_invoices(service, SEARCH_KEYWORD)
 
-    if not matched_files:
-        logger.warning("No matching files found across My Drive, Shared With Me, or Shortcut Folders.")
+    if not files:
+        logger.warning("No PDF files found matching search term.")
         return
 
     # Process files into 50-per-batch ZIPs
-    created_zips = process_batches_and_zip(service, matched_files)
-
-    # Save reconciliation report
-    report_path = os.path.join(OUTPUT_DIR, "reconciliation_report.csv")
-    report_rows = []
-    for m in matched_files:
-        report_rows.append({
-            "Invoice Number": m["invoice_number"],
-            "Supplier": m["supplier_name"],
-            "Drive Filename": m["filename"],
-            "Discovery Source": m.get("source", "My Drive"),
-            "Status": "MATCHED & DOWNLOADED"
-        })
-    for miss in missing_invoices:
-        report_rows.append({
-            "Invoice Number": miss,
-            "Supplier": "N/A",
-            "Drive Filename": "N/A",
-            "Discovery Source": "None",
-            "Status": "MISSING ON DRIVE"
-        })
-    pd.DataFrame(report_rows).to_csv(report_path, index=False)
+    created_zips = process_batches_and_zip(service, files)
 
     print("=" * 70)
     print("ALL BATCHES COMPLETE!")
-    print(f"Total Invoices in Sheet:  {len(invoice_entries)}")
-    print(f"Found & Downloaded:       {len(matched_files)}")
-    print(f"Missing from Drive:       {len(missing_invoices)}")
+    print(f"Total PDFs Found:         {len(files)}")
     print(f"Total ZIP Archives:       {len(created_zips)}")
     print("-" * 70)
-    print("Created ZIP Archives (50 files per batch):")
+    print("Created ZIP Archives (50 files per batch, flat structure):")
     for name, size_mb, count in created_zips:
         print(f"  * {name} ({count} files, {size_mb:.2f} MB)")
     print(f"ZIPs Location:            {os.path.abspath(ZIPS_DIR)}")
-    print(f"Report Location:          {os.path.abspath(report_path)}")
     print("=" * 70)
 
 
@@ -775,19 +315,13 @@ google-auth-oauthlib>=1.2.0
 }
 
 export function generateReadmeMd(config: ScriptConfig): string {
-  return `# Google Drive Invoice Harvester (Batch Sheet & 50-file ZIPs)
+  return `# Simple Google Drive Invoice Batch Downloader
 
-Reads an Excel/CSV sheet containing **Supplier Name** and **Invoice Number** (digits only), searches across:
-- **My Drive**
-- **"Shared with me"** files (\`sharedWithMe = true\`)
-- **Shortcut Folders** (\`application/vnd.google-apps.shortcut\` resolved to target folders)
-- **Shared Drives / Team Drives**
-
-Matching files named:
-- \`YYMMDD <invoice_number_digits> <reference>.pdf\`
-- \`YYMMDD <invoice_number_digits>.pdf\`
-
-And packages them in batches of **50 files per ZIP archive**!
+**CLEAN & SIMPLE:**
+- Searches Google Drive for PDFs containing "invoice" keyword
+- Downloads files AS-IS (no renaming, no 3-line PDF nonsense)
+- Batches into ZIPs: 50 files per batch
+- Flat ZIP structure (no folder organization inside)
 
 ## 🚀 Quick Setup
 
@@ -795,15 +329,22 @@ And packages them in batches of **50 files per ZIP archive**!
 # 1. Install dependencies
 pip install -r requirements.txt
 
-# 2. Place credentials.json and invoices_input.xlsx in this directory
+# 2. Place credentials.json in this directory
 
 # 3. Run the script
 python3 batch_download_invoices_zip.py
 \`\`\`
 
 ## 📦 What the script creates
-- \`./downloads/zip_batches/invoices_batch_01_1_to_50.zip\`
-- \`./downloads/zip_batches/invoices_batch_02_51_to_100.zip\`
-- \`./downloads/reconciliation_report.csv\`
+- \`./downloaded_invoices/zip_batches/invoices_batch_01_1_to_50.zip\`
+- \`./downloaded_invoices/zip_batches/invoices_batch_02_51_to_100.zip\`
+- etc.
+
+Each ZIP contains exactly 50 PDF files at the root level (no nested folders).
 `;
+}
+
+// Keep legacy function for backwards compatibility
+export function generateBatchSheetPythonScript(config: ScriptConfig, customMappings?: SupplierMapping[]): string {
+  return generateSimpleBatchPythonScript(config);
 }
