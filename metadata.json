@@ -1,0 +1,6 @@
+{
+  "name": "GDrive Invoice Downloader & Python Script Studio",
+  "description": "Customizable Python script generator and interactive tool to search and download invoice files from Google Drive matching invoice number patterns.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
