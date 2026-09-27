@@ -25,7 +25,8 @@ import {
   Check,
   Building2,
   FolderTree,
-  Folder
+  Folder,
+  Search
 } from 'lucide-react';
 import { SheetInvoiceRow, BatchZipItem, SessionAuditRecord, FolderStructureType } from '../types';
 import { BatchDashboard, BatchLogEntry } from './BatchDashboard';
@@ -57,6 +58,8 @@ export interface SheetBatchRunnerProps {
 
 // Pre-generated realistic dataset using the master hardcoded supplier list
 const SAMPLE_SHEET_DATA: { supplier: string; inv: string; source: 'my_drive' | 'shared_with_me' | 'shortcut_folder' }[] = [
+  { supplier: 'Screwfix Direct Ltd', inv: '57813', source: 'my_drive' },
+  { supplier: 'Toolstation Ltd', inv: '57629', source: 'shared_with_me' },
   { supplier: 'Screwfix Direct Ltd', inv: '489201', source: 'my_drive' },
   { supplier: 'BLANCO', inv: '102948', source: 'shared_with_me' },
   { supplier: 'Toolstation Ltd', inv: '948102', source: 'shortcut_folder' },
@@ -256,15 +259,24 @@ export const SheetBatchRunner: React.FC<SheetBatchRunnerProps> = ({
   // Structured logs for current batch & session
   const [batchLogs, setBatchLogs] = useState<BatchLogEntry[]>([]);
   const [zipBatches, setZipBatches] = useState<BatchZipItem[]>([]);
+  const [tableSearchQuery, setTableSearchQuery] = useState<string>('');
 
-  // Filter based on toggles
+  // Filter based on toggles and search query
   const filteredRows = useMemo(() => {
     return rows.filter((r) => {
       if (r.sourceType === 'shared_with_me' && !searchSharedWithMe) return false;
       if (r.sourceType === 'shortcut_folder' && !resolveShortcuts) return false;
+      if (tableSearchQuery.trim()) {
+        const query = tableSearchQuery.trim().toLowerCase();
+        const matchesInv = r.invoiceNumber.toLowerCase().includes(query);
+        const matchesSupplier = r.supplierName.toLowerCase().includes(query);
+        const matchesFile = (r.matchedFile || '').toLowerCase().includes(query);
+        const matchesRef = (r.reference || '').toLowerCase().includes(query);
+        if (!matchesInv && !matchesSupplier && !matchesFile && !matchesRef) return false;
+      }
       return true;
     });
-  }, [rows, searchSharedWithMe, resolveShortcuts]);
+  }, [rows, searchSharedWithMe, resolveShortcuts, tableSearchQuery]);
 
   // Dynamic set of skipped row IDs based on last successful invoice ID
   const skippedRowIds = useMemo(() => {
@@ -1467,6 +1479,60 @@ END OF LOG EXPORT (${batchLogs.length} events recorded)
               className="hidden"
             />
           </label>
+        </div>
+
+        {/* Search & Quick Check Toolbar */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-slate-950/70 p-3 rounded-xl border border-slate-800">
+          <div className="relative flex-1 max-w-md">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={tableSearchQuery}
+              onChange={(e) => setTableSearchQuery(e.target.value)}
+              placeholder="Search by invoice number or supplier (e.g. 57813, 57629)..."
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-8 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-amber-500 font-mono"
+            />
+            {tableSearchQuery && (
+              <button
+                onClick={() => setTableSearchQuery('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap text-xs">
+            <span className="text-slate-500 text-[11px] font-medium">Quick Check:</span>
+            <button
+              onClick={() => setTableSearchQuery('57813')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-mono font-semibold transition border ${
+                tableSearchQuery === '57813'
+                  ? 'bg-amber-500 text-slate-950 border-amber-400'
+                  : 'bg-slate-900 text-amber-300 border-amber-500/30 hover:bg-slate-800'
+              }`}
+            >
+              #57813
+            </button>
+            <button
+              onClick={() => setTableSearchQuery('57629')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-mono font-semibold transition border ${
+                tableSearchQuery === '57629'
+                  ? 'bg-amber-500 text-slate-950 border-amber-400'
+                  : 'bg-slate-900 text-amber-300 border-amber-500/30 hover:bg-slate-800'
+              }`}
+            >
+              #57629
+            </button>
+            {tableSearchQuery && (
+              <button
+                onClick={() => setTableSearchQuery('')}
+                className="px-2 py-1 rounded-lg text-[11px] text-slate-400 hover:text-slate-200 bg-slate-800 border border-slate-700 transition"
+              >
+                Show All ({rows.length})
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Table Preview */}

@@ -19,6 +19,8 @@ interface RegexTesterProps {
 export const RegexTester: React.FC<RegexTesterProps> = ({ currentPattern, onApplyPattern }) => {
   const [testPattern, setTestPattern] = useState(currentPattern);
   const [testFiles, setTestFiles] = useState<string[]>([
+    '260403 57813.pdf',
+    '260403 57629.pdf',
     '260403 489201 REF9942.pdf',
     '260403 489201.pdf',
     'Invoice_INV-2024-8841.pdf',
